@@ -1,0 +1,318 @@
+@startuml classes
+skinparam defaultFontName DejaVu Sans
+skinparam classAttributeIconSize 0
+skinparam linetype polyline
+skinparam nodesep 60
+skinparam ranksep 70
+hide empty members
+
+title Вариант 3 — Диаграмма классов (ИБ · ИЗ1 · ПЗ2 · Д1ОЗ1 · Д1ОО3 · Д2П1 · Д2Б3 · ОР1 · ОД1)
+
+package "Модель предметной области" {
+  enum RequestStatus {
+    CREATED
+    IN_BUFFER
+    IN_SERVICE
+    SERVED
+    REJECTED
+  }
+
+  enum AlarmType {
+    THRESHOLD_EXCEEDED
+    EQUIPMENT_FAULT
+    ACCESS_VIOLATION
+  }
+
+  class Request <<Заявка = тревожное сообщение>> {
+    - id: long
+    - sourceId: int
+    - alarmType: AlarmType
+    - objectId: String
+    - generationTime: double
+    - bufferPutTime: double
+    - serviceStartTime: double
+    - finishTime: double
+    - status: RequestStatus
+    + Request(id: long, sourceId: int, alarmType: AlarmType, objectId: String, generationTime: double)
+    + markBuffered(time: double): void
+    + markInService(time: double): void
+    + markServed(time: double): void
+    + reject(time: double): void
+    + getTimeInBuffer(): double
+    + getServiceTime(): double
+    + getTimeInSystem(): double
+    + getId(): long
+    + getSourceId(): int
+    + getBufferPutTime(): double
+    + getStatus(): RequestStatus
+  }
+}
+
+package "Законы распределения" {
+  interface Distribution {
+    + next(): double
+  }
+  class ExponentialDistribution <<ИЗ1>> {
+    - lambda: double
+    - random: Random
+    + next(): double  // −ln(r)/λ
+  }
+  class UniformDistribution <<ПЗ2>> {
+    - a: double
+    - b: double
+    - random: Random
+    + next(): double  // a + (b − a)·r
+  }
+}
+
+package "Элементы СМО" {
+  class Source <<ИБ: датчик / контроллер / СКУД>> {
+    - id: int
+    - interval: Distribution
+    - nextNumber: int
+    + generate(currentTime: double): Request
+    + nextArrivalInterval(): double
+    + getId(): int
+  }
+
+  class Buffer <<Очередь тревог, N мест>> {
+    - capacity: int
+    - slots: Request[]
+    - occupied: int
+    + findFreeSlotByRing(start: int): int
+    + findOccupiedSlotByRing(start: int): int
+    + findOldestSlot(): int
+    + put(slot: int, request: Request): void
+    + removeAt(slot: int): Request
+    + isFull(): boolean
+    + isEmpty(): boolean
+    + getCapacity(): int
+    + snapshot(): Request[]
+  }
+
+  class Device <<Прибор: рабочий процесс анализа>> {
+    - id: int
+    - serviceTime: Distribution
+    - current: Request
+    - serviceStart: double
+    - busyTimeTotal: double
+    + isFree(): boolean
+    + startService(request: Request, currentTime: double): double
+    + finishService(currentTime: double): Request
+    + getCurrent(): Request
+    + getBusyTimeTotal(): double
+    + getId(): int
+  }
+}
+
+package "Диспетчеры" {
+  class PlacementDispatcher <<ДП: компонент приёма тревог>> {
+    - buffer: Buffer
+    - statistics: StatisticsCollector
+    - putPointer: int
+    + place(request: Request, currentTime: double): PlacementResult
+    - evictOldest(currentTime: double): int
+    - advancePointer(slot: int): void
+    + getPutPointer(): int
+  }
+  note bottom of PlacementDispatcher
+    Д1ОЗ1: k = buffer.findFreeSlotByRing(putPointer)
+    Д1ОО3: если k = −1 → s = buffer.findOldestSlot(),
+           removeAt(s), reject, put(s, request)
+    putPointer = (k + 1) mod N
+    ДП не знает о приборах.
+  end note
+
+  class SelectionDispatcher <<ДВ: планировщик проверки>> {
+    - buffer: Buffer
+    - devices: List<Device>
+    - calendar: EventCalendar
+    - statistics: StatisticsCollector
+    - takePointer: int
+    + onRequestBuffered(currentTime: double): void
+    + onDeviceReleased(currentTime: double): void
+    - dispatch(currentTime: double): void
+    - findFreeDeviceByPriority(): Device
+    - takeRequestByRing(): Request
+    + getTakePointer(): int
+  }
+  note bottom of SelectionDispatcher
+    Д2П1: перебор devices[0..m−1], первый isFree()
+    Д2Б3: q = buffer.findOccupiedSlotByRing(takePointer),
+          takePointer = (q + 1) mod N
+  end note
+
+  class PlacementResult <<value object>> {
+    - slot: int
+    - evicted: Request
+    + getSlot(): int
+    + getEvicted(): Request
+    + hasEviction(): boolean
+  }
+}
+
+package "Движок моделирования (метод особых событий)" {
+  enum EventType {
+    GENERATION
+    SERVICE_END
+  }
+
+  class Event <<Comparable>> {
+    - time: double
+    - type: EventType
+    - sourceId: int
+    - deviceId: int
+    + compareTo(other: Event): int
+    + getTime(): double
+    + getType(): EventType
+  }
+  note right of Event
+    Сортировка: по времени;
+    при равенстве SERVICE_END
+    раньше GENERATION.
+  end note
+
+  class EventCalendar {
+    - queue: PriorityQueue<Event>
+    + schedule(event: Event): void
+    + pollNext(): Event
+    + isEmpty(): boolean
+    + view(): List<Event>
+  }
+
+  class SimulationConfig {
+    - sourceLambdas: double[]
+    - deviceCount: int
+    - serviceMin: double
+    - serviceMax: double
+    - bufferCapacity: int
+    - requestsLimit: long
+    - seed: long
+  }
+
+  class Simulator {
+    - config: SimulationConfig
+    - currentTime: double
+    - calendar: EventCalendar
+    - sources: List<Source>
+    - buffer: Buffer
+    - devices: List<Device>
+    - placementDispatcher: PlacementDispatcher
+    - selectionDispatcher: SelectionDispatcher
+    - statistics: StatisticsCollector
+    - journal: List<StepSnapshot>
+    + init(): void
+    + step(): StepSnapshot
+    + runAuto(): ResultsTable
+    + isFinished(): boolean
+    - handleGeneration(event: Event): void
+    - handleServiceEnd(event: Event): void
+    - snapshot(event: Event): StepSnapshot
+  }
+}
+
+package "Статистика и отображение (ОД1, ОР1)" {
+  class StatisticsCollector {
+    - generated: long[]
+    - rejected: long[]
+    - served: long[]
+    - sumTimeInBuffer: double[]
+    - sumSqTimeInBuffer: double[]
+    - sumServiceTime: double[]
+    - sumSqServiceTime: double[]
+    - devices: List<Device>
+    + recordGenerated(request: Request): void
+    + recordRejected(request: Request): void
+    + recordServiceStart(request: Request, time: double): void
+    + recordServed(request: Request): void
+    + getRejectProbability(): double
+    + getTotalGenerated(): long
+    + buildResults(totalTime: double): ResultsTable
+  }
+
+  class StepSnapshot <<ОД1: строка пошагового режима>> {
+    - time: double
+    - eventDescription: String
+    - calendar: List<Event>
+    - bufferSlots: Request[]
+    - putPointer: int
+    - takePointer: int
+    - deviceStates: List<Request>
+    - rejectPercent: double
+  }
+
+  class ResultsTable <<ОР1: сводная таблица>> {
+    - sourceRows: List<SourceStats>
+    - deviceRows: List<DeviceStats>
+    + getSourceRows(): List<SourceStats>
+    + getDeviceRows(): List<DeviceStats>
+  }
+
+  class SourceStats {
+    - sourceId: int
+    - generated: long
+    - rejectProbability: double
+    - avgTimeInSystem: double
+    - avgTimeInBuffer: double
+    - avgServiceTime: double
+    - varTimeInBuffer: double
+    - varServiceTime: double
+  }
+
+  class DeviceStats {
+    - deviceId: int
+    - utilization: double
+  }
+
+  class ExperimentRunner {
+    - baseConfig: SimulationConfig
+    + findRequiredRequests(): long
+    + compareConfigs(configs: List<SimulationConfig>): List<ResultsTable>
+  }
+  note bottom of ExperimentRunner
+    N = t²α·(1 − p) / (p·δ²),
+    tα = 1,643; δ = 0,1; старт N₀ = 100
+  end note
+}
+
+' ---------- связи ----------
+Request --> RequestStatus
+Request --> AlarmType
+ExponentialDistribution ..|> Distribution
+UniformDistribution ..|> Distribution
+
+Source o--> "1" Distribution : - interval (ИЗ1)
+Source ..> Request : <<create>>
+Device o--> "1" Distribution : - serviceTime (ПЗ2)
+Device --> "0..1" Request : - current
+Buffer o--> "0..N" Request : - slots
+
+PlacementDispatcher --> "1" Buffer : - buffer
+PlacementDispatcher --> "1" StatisticsCollector : - statistics
+PlacementDispatcher ..> PlacementResult : <<create>>
+
+SelectionDispatcher --> "1" Buffer : - buffer
+SelectionDispatcher --> "1..m" Device : - devices
+SelectionDispatcher --> "1" EventCalendar : - calendar
+SelectionDispatcher --> "1" StatisticsCollector : - statistics
+
+EventCalendar o--> "*" Event : - queue
+Event --> EventType
+
+Simulator *--> "1" EventCalendar
+Simulator *--> "1..n" Source
+Simulator *--> "1" Buffer
+Simulator *--> "1..m" Device
+Simulator *--> "1" PlacementDispatcher
+Simulator *--> "1" SelectionDispatcher
+Simulator *--> "1" StatisticsCollector
+Simulator --> "1" SimulationConfig : - config
+Simulator ..> StepSnapshot : <<create>>
+
+StatisticsCollector --> "1..m" Device : - devices (Кисп)
+StatisticsCollector ..> ResultsTable : <<create>>
+ResultsTable *--> "1..n" SourceStats
+ResultsTable *--> "1..m" DeviceStats
+ExperimentRunner ..> Simulator : <<create>>
+ExperimentRunner --> SimulationConfig : - baseConfig
+@enduml
