@@ -1,0 +1,52 @@
+@startuml archimate
+!include <archimate/Archimate>
+skinparam defaultFontName DejaVu Sans
+left to right direction
+
+title Вариант 3 — Бизнес-процесс «Обработка промышленной тревоги» (ArchiMate 3.0)
+
+Grouping(obj, "Промышленный объект") {
+  Business_Actor(op, "Диспетчер смены\n(получатель инцидентов)")
+  Technology_Device(sens, "Датчики оборудования")
+  Technology_Device(plc, "Контроллеры линий")
+  Technology_Device(acs, "Система контроля доступа")
+}
+
+Business_Event(evAlarm, "Сформирована тревога")
+Business_Process(pAccept, "Приём тревоги\n(ДП: Д1ОЗ1 / Д1ОО3)")
+Business_Process(pSchedule, "Назначение на проверку\n(ДВ: Д2Б3 + Д2П1)")
+Business_Process(pCheck, "Проверка и классификация\n(прибор, ПЗ2)")
+Business_Event(evDone, "Инцидент зарегистрирован")
+Business_Event(evReject, "Тревога вытеснена\n(отказ)")
+
+Business_Object(boAlarm, "Тревожное сообщение\n(заявка)")
+Business_Object(boIncident, "Карточка инцидента")
+
+Application_Component(acDP, "Компонент приёма тревог")
+Application_Component(acQueue, "Очередь тревог\n(буфер, N мест)")
+Application_Component(acDV, "Планировщик проверки")
+Application_Component(acWorker, "Рабочие процессы анализа\n(приборы П1..Пm)")
+Application_Component(acStat, "Мониторинг и статистика\n(ОД1, ОР1)")
+
+Rel_Triggering(sens, evAlarm, "")
+Rel_Triggering(plc, evAlarm, "")
+Rel_Triggering(acs, evAlarm, "")
+Rel_Triggering(evAlarm, pAccept, "")
+Rel_Triggering(pAccept, pSchedule, "заявка в буфере /\nприбор освободился")
+Rel_Triggering(pSchedule, pCheck, "")
+Rel_Triggering(pCheck, evDone, "")
+Rel_Triggering(pAccept, evReject, "буфер полон")
+Rel_Serving(evDone, op, "")
+
+Rel_Access_w(pAccept, boAlarm, "")
+Rel_Access_r(pCheck, boAlarm, "")
+Rel_Access_w(pCheck, boIncident, "")
+
+Rel_Realization(acDP, pAccept, "")
+Rel_Realization(acDV, pSchedule, "")
+Rel_Realization(acWorker, pCheck, "")
+Rel_Serving(acQueue, acDP, "")
+Rel_Serving(acQueue, acDV, "")
+Rel_Flow(acDP, acStat, "отказы")
+Rel_Flow(acWorker, acStat, "время, загрузка")
+@enduml
